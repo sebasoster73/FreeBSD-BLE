@@ -65,6 +65,18 @@ int register_notify(int cid, struct service *serv, int s)
 	sqlite3_reset(queryhandle);
 
 	/*
+	 * The HOGP heuristics may add the same characteristic twice:
+	 * dispatching both would process every report twice.
+	 */
+	for (int i = 0; i < numdispatcher - 1; i++) {
+		if (dispatcher[i].handle == d->handle) {
+			printf("NOTIFY: handle 0x%04x already registered\n", d->handle);
+			numdispatcher--;
+			return 0;
+		}
+	}
+
+	/*
 	 * NOTE: This will write the CCCD (0x2902) attribute (by its handly of course)
 	 * that __belongs__ to the characteristics attibute, we try to subscribe to.
 	 * The notifications will contain the handle of the characteristics attribute, though.
