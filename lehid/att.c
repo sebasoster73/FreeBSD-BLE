@@ -36,6 +36,44 @@ int le_write(int s, unsigned char *buf, size_t siz)
 }
 
 /*
+ * Answer ATT requests coming from the peripheral (acting as GATT client).
+ * We expose no GATT database. Leaving a request unanswered makes the
+ * peer hit the 30 s ATT transaction timeout, after which it sends no more
+ * ATT PDUs on the bearer -- notifications included (e.g. the HP 240 mouse
+ * probes for ANCS right after connecting and goes silent 30 s later).
+ * Uses write() directly so sentcmd keeps tracking our own pending request.
+ */
+static void le_reject_request(int s, const unsigned char *buf, int len)
+{
+	unsigned char rsp[5];
+
+	if (buf[0] == 0x02) {		/* Exchange MTU Request */
+		rsp[0] = 0x03;
+		rsp[1] = 23;
+		rsp[2] = 0;
+		write(s, rsp, 3);
+		return;
+	}
+	rsp[0] = ATT_OP_ERR;
+	rsp[1] = buf[0];
+	rsp[2] = len >= 3 ? buf[1] : 0;
+	rsp[3] = len >= 3 ? buf[2] : 0;
+	switch (buf[0]) {
+	case 0x04:	/* Find Information */
+	case 0x06:	/* Find By Type Value */
+	case 0x08:	/* Read By Type */
+	case 0x10:	/* Read By Group Type */
+		rsp[4] = 0x0a;	/* Attribute Not Found */
+		break;
+	default:
+		rsp[4] = 0x06;	/* Request Not Supported */
+		break;
+	}
+	write(s, rsp, sizeof(rsp));
+	printf("ATT: rejected peer request 0x%02x (error 0x%02x)\n", buf[0], rsp[4]);
+}
+
+/*
  * Process LE packet from peripheral.
  * Return value
  * >=0 len.
@@ -103,6 +141,7 @@ int le_read_one(int s,unsigned char *buf,size_t buflen)
 		
 	case ATT_OP_FIND_INFO_REQ:
 		printf("FIND_INFO\n");
+		le_reject_request(s, buf, len);
 		ret = -2;
 		break;
 	case ATT_OP_FIND_TYPE_REQ:
@@ -111,10 +150,17 @@ int le_read_one(int s,unsigned char *buf,size_t buflen)
 			printf("%02x ", buf[i]);
 		}
 		printf("\n");
+		le_reject_request(s, buf, len);
 		ret = -2;
 		break;
 	case ATT_OP_WRITE_RES:
 		ret = 0;
+		break;
+	case 0x02: case 0x08: case 0x0a: case 0x0c: case 0x0e:
+	case 0x10: case 0x12: case 0x16: case 0x18: case 0x20:
+		/* any other request from the peripheral */
+		le_reject_request(s, buf, len);
+		ret = -2;
 		break;
 	default:
 		printf("UNKNOWN\n");
