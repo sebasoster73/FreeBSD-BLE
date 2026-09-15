@@ -379,7 +379,12 @@ void hogp_process_report(struct hogp_service *serv, unsigned char *buf)
 		    (h.kind != hid_input))
 			continue;
 		page = HID_PAGE(h.usage);		
-		val = hid_get_data(buf, &h);
+		/*
+		 * buf[0] holds the report ID. libusbhid only skips that byte
+		 * (pos starts at 8) when the descriptor defines report IDs;
+		 * without them (rid 0) the data starts right after it.
+		 */
+		val = hid_get_data(rid != 0 ? buf : buf + 1, &h);
 		
 		/*
 		 * When the input field is an array and the usage is specified
