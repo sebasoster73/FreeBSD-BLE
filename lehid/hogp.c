@@ -106,7 +106,7 @@ void hogp_notify(void *sc, int charid, unsigned char *buf, size_t len);
 #define REPORT_REFERENCE 0x2908
 #define CLIENT_CONFIGURATION 0x2902
 
-#define MAXRIDMAP 10
+#define MAXRIDMAP 20
 struct hogp_ridmap{
 	int cid;
 	int rid;
@@ -337,15 +337,45 @@ void hogp_init(struct service *service, int s)
 	stmt = get_stmt("SELECT chara_id FROM ble_chara INNER JOIN reftable ON ble_chara.uuid=reftable.uuid INNER JOIN iservice ON iservice.service_id=ble_chara.service_id;");
 	serv->nrmap = 0;
 	while((error = sqlite3_step(stmt)) == SQLITE_ROW){
-		int report_type;
+		int report_type, i;
 		cid = sqlite3_column_int(stmt, 0);
 		btuuid16(REPORT_REFERENCE, &uuid);
 		le_char_desc_read(s, cid, &uuid, buf, sizeof(buf), 0);
-		serv->rmap[serv->nrmap].cid = cid;
-		serv->rmap[serv->nrmap].rid = buf[0];
-		report_type = serv->rmap[serv->nrmap].type = buf[1];		
+		report_type = buf[1];
 		printf("CharID: %x ReportID:%d ReportType:%d\n", cid,
 		       buf[0], buf[1]);
+		/*
+		 * A peripheral may list the same Report characteristic twice,
+		 * once under the primary HID service and again under the
+		 * service it includes, with both entries resolving to the very
+		 * same GATT handle. A Logitech MX Keys Mini does exactly that:
+		 * it declares 18 reports where it really has 9.
+		 *
+		 * rmap[] holds MAXRIDMAP of them, this loop never checked, and
+		 * rmap[] is the last member of the struct -- so the extra
+		 * entries went straight past the end of the malloc().
+		 *
+		 * Keep the first of each (report ID, type): either cid reaches
+		 * the same attribute, so which one is kept makes no difference.
+		 * register_notify() already dedups the same way, by handle.
+		 */
+		for (i = 0; i < serv->nrmap; i++)
+			if (serv->rmap[i].rid == buf[0] &&
+			    serv->rmap[i].type == report_type)
+				break;
+		if (i < serv->nrmap)
+			continue;
+		/*
+		 * And never write past the array, whatever the peripheral says.
+		 */
+		if (serv->nrmap >= MAXRIDMAP) {
+			printf("rmap full at %d, ignoring report %d type %d\n",
+			    MAXRIDMAP, buf[0], report_type);
+			continue;
+		}
+		serv->rmap[serv->nrmap].cid = cid;
+		serv->rmap[serv->nrmap].rid = buf[0];
+		serv->rmap[serv->nrmap].type = report_type;
 		serv->nrmap++;
 		if(report_type == 1){
 			register_notify(cid, service, s);
