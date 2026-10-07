@@ -38,7 +38,7 @@ static int numdispatcher;
 int register_notify(int cid, struct service *serv, int s)
 {
 	static sqlite3_stmt *queryhandle;
-	struct notify_dispatcher *d;
+	struct notify_dispatcher *d, *nd;
 	unsigned char buf[50];
 	uuid_t uuid;
 
@@ -48,12 +48,21 @@ int register_notify(int cid, struct service *serv, int s)
 		printf("QUERYHANDLE\n" );
 		return -1;
 	}
-	numdispatcher++;
-	dispatcher = realloc(dispatcher, numdispatcher*(sizeof(*dispatcher)));
-	if(dispatcher == NULL){
+	/*
+	 * Grow first, commit after: bumping the count before the realloc left
+	 * dispatcher NULL with numdispatcher > 0 if it ever failed, and
+	 * notify_handler() walks that array on every notification -- so the
+	 * failure path was a NULL dereference. Assigning the result straight
+	 * to dispatcher also dropped the only pointer to the handlers already
+	 * registered.
+	 */
+	nd = realloc(dispatcher, (numdispatcher + 1) * sizeof(*dispatcher));
+	if (nd == NULL) {
 		printf("ENOMEM\n");
 		return -1;
 	}
+	dispatcher = nd;
+	numdispatcher++;
 	d = &dispatcher[numdispatcher -1];
 	d->cid = cid;
 	d->serv =serv;
