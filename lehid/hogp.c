@@ -659,10 +659,18 @@ void hogp_process_report(struct hogp_service *serv, unsigned char *buf)
 
 	
 }
+/*
+ * Room for the biggest report that can reach us: le_event() reads the whole
+ * PDU into 50 bytes, so the report itself is at most that minus the handle.
+ */
+#define HOGP_MAXREPORT	64
+
 void hogp_notify(void *sc, int charid, unsigned char *buf, size_t len)
 {
 	int i;
 	struct hogp_service *serv = sc;
+	unsigned char rep[HOGP_MAXREPORT];
+	size_t n;
 	int rid;
 	int page;
 	rid = -1;
@@ -672,6 +680,30 @@ void hogp_notify(void *sc, int charid, unsigned char *buf, size_t len)
 			break;
 		}
 	}
-	buf[1] = rid;
-	hogp_process_report(serv, buf+1);
+	/* [handle:2][report...]: without the handle there is nothing to do. */
+	if (len < 2)
+		return;
+	/*
+	 * le_event() reads every notification into the same 50 byte buffer on
+	 * the stack and nothing clears it in between, while
+	 * hogp_process_report() is given no length and simply walks the report
+	 * map, calling hid_get_data() for every field in it. A report shorter
+	 * than its map says therefore had the tail of the PREVIOUS
+	 * notification parsed as if the peripheral had just sent it.
+	 *
+	 * Copy what actually arrived into a zeroed buffer instead: a field
+	 * that did not come reads as zero, which is a key not pressed and an
+	 * axis that did not move. A full report is copied verbatim and behaves
+	 * exactly as before -- which is why this is a copy and not a length
+	 * check against hid_report_size(): nothing that works today can start
+	 * being rejected. It also stops us writing the report ID into the
+	 * caller's buffer, which is what buf[1] = rid did.
+	 */
+	memset(rep, 0, sizeof(rep));
+	rep[0] = rid;
+	n = len - 2;
+	if (n > sizeof(rep) - 1)
+		n = sizeof(rep) - 1;
+	memcpy(rep + 1, buf + 2, n);
+	hogp_process_report(serv, rep);
 }
